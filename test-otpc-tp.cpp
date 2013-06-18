@@ -21,16 +21,21 @@
  */
 class server : private boost::noncopyable {
 public:
-	server(ba::io_service& io_service, int thnum, int port=10001);
+	server(ba::io_service& io_service_accept, ba::io_service& io_service_execute, 
+		unsigned int thread_num_acceptors, unsigned int thread_num_executors, unsigned int port = 10001);
+	~server();
 
 private:
 	void handle_accept(const boost::system::error_code& e);
 	
-	ba::io_service& io_service_;         /**< reference to io_service */
-	boost::asio::io_service::work work_; /**< object to inform the io_service when it has work to do */
+	ba::io_service& io_service_acceptors_;  /**< reference to io_service */
+	ba::io_service& io_service_executors_;  /**< reference to io_service */
+	boost::asio::io_service::work work_acceptors_;  /**< object to inform the io_service_acceptors_ when it has work to do */
+	boost::asio::io_service::work work_executors_;  /**< object to inform the io_service_executors_ when it has work to do */
+	std::vector<boost::thread> thr_grp_acceptors_;  /**< thread pool object for acceptors */
+	std::vector<boost::thread> thr_grp_executors_;  /**< thread pool object for executors */
 	ba::ip::tcp::acceptor acceptor_;     /**< object, that accepts new connections */
 	connection::pointer new_connection_; /**< pointer to connection, that will proceed next */
-	std::vector<boost::thread> thr_grp;  /**< thread pool object */
 };
 
 /** 
@@ -40,20 +45,38 @@ private:
  * @param thnum number of threads in thread pool
  * @param port port to listen on, by default - 10001
  */
-server::server(ba::io_service& io_service, int thnum, int port)
-	: io_service_(io_service),
-	  work_(io_service_),
-	  acceptor_(io_service_, ba::ip::tcp::endpoint(ba::ip::tcp::v4(), port)),
-	  new_connection_(connection::create(io_service_))
+server::server(ba::io_service& io_service_acceptors, ba::io_service& io_service_executors, 
+			   unsigned int thread_num_acceptors, unsigned int thread_num_executors, unsigned int port)
+	: io_service_acceptors_(io_service_acceptors),
+	  io_service_executors_(io_service_executors),
+	  work_acceptors_(io_service_acceptors_),
+	  work_executors_(io_service_executors_),
+	  acceptor_(io_service_acceptors_, ba::ip::tcp::endpoint(ba::ip::tcp::v4(), port)),
+	  new_connection_(connection::create(io_service_executors_))
 {
-	// create threads in pool
-	for(size_t i = 0; i < thnum; ++i)
-		thr_grp.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_));
+	// create threads in pool for acceptors
+	for(size_t i = 0; i < thread_num_acceptors - 1; ++i)
+		thr_grp_acceptors_.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_acceptors_));
+
+	// create threads in pool for executors
+	for(size_t i = 0; i < thread_num_executors; ++i)
+		thr_grp_executors_.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_executors_));
 
 	// start acceptor in async mode
 	acceptor_.async_accept(new_connection_->socket(),
 						   boost::bind(&server::handle_accept, this,
 									   ba::placeholders::error));
+}
+
+/** 
+ * Wait for all executing threads
+ * 
+ */
+server::~server() {
+	io_service_acceptors_.stop();
+	io_service_executors_.stop();
+	for(auto &i : thr_grp_acceptors_) i.join();
+	for(auto &i : thr_grp_executors_) i.join();
 }
 
 /** 
@@ -64,9 +87,9 @@ server::server(ba::io_service& io_service, int thnum, int port)
 void server::handle_accept(const boost::system::error_code& e) {
 	if (!e) {
 		// schedule new task to thread pool
-		io_service_.post(boost::bind(&connection::run, new_connection_));
+		io_service_executors_.post(boost::bind(&connection::run, new_connection_));
 		// create next connection, that will accepted
-		new_connection_=connection::create(io_service_);
+		new_connection_=connection::create(io_service_executors_);
 		// start new accept operation
 		acceptor_.async_accept(new_connection_->socket(),
 							   boost::bind(&server::handle_accept, this,
@@ -84,18 +107,20 @@ void server::handle_accept(const boost::system::error_code& e) {
  */
 int main(int argc, char** argv) {
 	try {
-		int thread_num=10, port=10001;
+		int thread_num_acceptors = 2, thread_num_executors = 10, port = 10001;
 		// read number of threads in thread pool from command line, if provided
 		if(argc > 1)
-			thread_num=boost::lexical_cast<int>(argv[1]);
-		// read port number from command line, if provided
+			thread_num_acceptors = boost::lexical_cast<int>(argv[1]);
 		if(argc > 2)
-			port=boost::lexical_cast<int>(argv[2]);
-		ba::io_service io_service;
+			thread_num_executors = boost::lexical_cast<int>(argv[2]);
+		// read port number from command line, if provided
+		if(argc > 3)
+			port = boost::lexical_cast<int>(argv[3]);
+		ba::io_service io_service_acceptors, io_service_executors;
 		// construct new server object
-		server s(io_service, thread_num, port);
+		server s(io_service_acceptors, io_service_executors, thread_num_acceptors, thread_num_executors, port);
 		// run io_service object, that perform all dispatch operations
-		io_service.run();
+		io_service_acceptors.run();
 	} catch (std::exception& e) {
 		std::cerr << e.what() << std::endl;
 	}
