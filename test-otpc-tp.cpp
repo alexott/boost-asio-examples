@@ -12,10 +12,8 @@
  */
 
 #include "test-otpc-conn.hpp"
-#include <set>
+#include <vector>
 
-#include <boost/threadpool.hpp>
-namespace tp=boost::threadpool;
 
 /**
  * Server class
@@ -29,9 +27,10 @@ private:
 	void handle_accept(const boost::system::error_code& e);
 	
 	ba::io_service& io_service_;         /**< reference to io_service */
+	boost::asio::io_service::work work_; /**< object to inform the io_service when it has work to do */
 	ba::ip::tcp::acceptor acceptor_;     /**< object, that accepts new connections */
 	connection::pointer new_connection_; /**< pointer to connection, that will proceed next */
-	tp::pool thp;				         /**< thread pool object */
+	std::vector<boost::thread> thr_grp;  /**< thread pool object */
 };
 
 /** 
@@ -43,9 +42,14 @@ private:
  */
 server::server(ba::io_service& io_service, int thnum, int port)
 	: io_service_(io_service),
+	  work_(io_service_),
 	  acceptor_(io_service_, ba::ip::tcp::endpoint(ba::ip::tcp::v4(), port)),
-	  new_connection_(connection::create(io_service_)),
-	  thp(thnum) {
+	  new_connection_(connection::create(io_service_))
+{
+	// create threads in pool
+	for(size_t i = 0; i < thnum; ++i)
+		thr_grp.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_));
+
 	// start acceptor in async mode
 	acceptor_.async_accept(new_connection_->socket(),
 						   boost::bind(&server::handle_accept, this,
@@ -60,7 +64,7 @@ server::server(ba::io_service& io_service, int thnum, int port)
 void server::handle_accept(const boost::system::error_code& e) {
 	if (!e) {
 		// schedule new task to thread pool
-		thp.schedule(boost::bind(&connection::run, new_connection_));
+		io_service_.post(boost::bind(&connection::run, new_connection_));
 		// create next connection, that will accepted
 		new_connection_=connection::create(io_service_);
 		// start new accept operation
@@ -80,7 +84,7 @@ void server::handle_accept(const boost::system::error_code& e) {
  */
 int main(int argc, char** argv) {
 	try {
-		int thread_num=10,port=10001;
+		int thread_num=10, port=10001;
 		// read number of threads in thread pool from command line, if provided
 		if(argc > 1)
 			thread_num=boost::lexical_cast<int>(argv[1]);
@@ -89,7 +93,7 @@ int main(int argc, char** argv) {
 			port=boost::lexical_cast<int>(argv[2]);
 		ba::io_service io_service;
 		// construct new server object
-		server s(io_service, thread_num,port);
+		server s(io_service, thread_num, port);
 		// run io_service object, that perform all dispatch operations
 		io_service.run();
 	} catch (std::exception& e) {
