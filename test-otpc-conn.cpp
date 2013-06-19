@@ -13,7 +13,7 @@
  * What we'll return to browser/test utility
  * 
  */
-std::string connection::message_="HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n"
+const std::string connection::message_="HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n"
 	"<html><head><title>test</title>"
 	"</head><body><h1>Test</h1><p>This is a test!</p></body></html>";
 
@@ -25,7 +25,7 @@ std::string connection::message_="HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n
  * 
  * @return nothing
  */
-connection::connection(ba::io_service& io_service) :
+connection::connection(ba::io_service& io_service, hide_me) :
 	io_service_(io_service), socket_(io_service) {
 }
 	
@@ -42,8 +42,6 @@ void connection::run() {
 		ba::write(socket_,ba::buffer(message_),ba::transfer_all());
 		// close socket
 		socket_.close();
-		// reset pointer to themself, destroying current object
-		shared_from_this().reset();
 	} catch(std::exception& x) {
 //		std::cerr << "Exception: " << x.what() << std::endl;
 	}

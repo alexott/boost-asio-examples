@@ -16,9 +16,12 @@
  * Class for handling connection in sync mode
  * 
  */
-class connection : public boost::enable_shared_from_this<connection> {
+class connection {
+	struct hide_me {};	// Instead of having to make friend boost::make_shared<connection>()
 public:
 	typedef boost::shared_ptr<connection> pointer;
+
+	connection(ba::io_service& io_service, hide_me);
 
 	/** 
 	 * Create new connection 
@@ -28,7 +31,7 @@ public:
 	 * @return pointer to newly allocated object
 	 */
 	static pointer create(ba::io_service& io_service) {
-		return pointer(new connection(io_service));
+		return boost::make_shared<connection>(io_service, hide_me());
 	}
 
 	/** 
@@ -43,12 +46,10 @@ public:
 	void run();
 	
 private:
-	connection(ba::io_service& io_service);
-	
-	ba::io_service& io_service_; /**< reference to io_service, in which work this connection */
-	ba::ip::tcp::socket socket_; /**< socket, associated with browser */
-	ba::streambuf buf;			 /**< buffer for request data */
-	static std::string message_; /**< data, that we'll return to browser */
+	ba::io_service& io_service_;	   /**< reference to io_service, in which work this connection */
+	ba::ip::tcp::socket socket_;	   /**< socket, associated with browser */
+	ba::streambuf buf;				   /**< buffer for request data */
+	const static std::string message_; /**< data, that we'll return to browser */
 };
 
 

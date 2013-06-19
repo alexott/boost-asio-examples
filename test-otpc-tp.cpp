@@ -26,16 +26,15 @@ public:
 	~server();
 
 private:
-	void handle_accept(const boost::system::error_code& e);
+	void handle_accept(connection::pointer old_connection, const boost::system::error_code& e);
 	
 	ba::io_service& io_service_acceptors_;  /**< reference to io_service */
 	ba::io_service& io_service_executors_;  /**< reference to io_service */
-	boost::asio::io_service::work work_acceptors_;  /**< object to inform the io_service_acceptors_ when it has work to do */
-	boost::asio::io_service::work work_executors_;  /**< object to inform the io_service_executors_ when it has work to do */
+	ba::io_service::work work_acceptors_;   /**< object to inform the io_service_acceptors_ when it has work to do */
+	ba::io_service::work work_executors_;   /**< object to inform the io_service_executors_ when it has work to do */
 	std::vector<boost::thread> thr_grp_acceptors_;  /**< thread pool object for acceptors */
 	std::vector<boost::thread> thr_grp_executors_;  /**< thread pool object for executors */
 	ba::ip::tcp::acceptor acceptor_;     /**< object, that accepts new connections */
-	connection::pointer new_connection_; /**< pointer to connection, that will proceed next */
 };
 
 /** 
@@ -51,21 +50,26 @@ server::server(ba::io_service& io_service_acceptors, ba::io_service& io_service_
 	  io_service_executors_(io_service_executors),
 	  work_acceptors_(io_service_acceptors_),
 	  work_executors_(io_service_executors_),
-	  acceptor_(io_service_acceptors_, ba::ip::tcp::endpoint(ba::ip::tcp::v4(), port)),
-	  new_connection_(connection::create(io_service_executors_))
+	  acceptor_(io_service_acceptors_, ba::ip::tcp::endpoint(ba::ip::tcp::v4(), port))
 {
-	// create threads in pool for acceptors
-	for(size_t i = 0; i < thread_num_acceptors - 1; ++i)
-		thr_grp_acceptors_.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_acceptors_));
-
 	// create threads in pool for executors
 	for(size_t i = 0; i < thread_num_executors; ++i)
 		thr_grp_executors_.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_executors_));
 
-	// start acceptor in async mode
-	acceptor_.async_accept(new_connection_->socket(),
-						   boost::bind(&server::handle_accept, this,
-									   ba::placeholders::error));
+	// create threads in pool and start acceptors
+	for(size_t i = 0; i < thread_num_acceptors; ++i) {
+		// create threads in pool
+		if(i != 0)	// one main thread already in pool from: int main() { ... io_service_acceptors.run(); ... }
+			thr_grp_acceptors_.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_acceptors_));
+
+		// create next connection, that will accepted next
+		connection::pointer new_connection = connection::create(io_service_executors_);
+
+		// start another acceptor in async mode
+		acceptor_.async_accept(new_connection->socket(),
+							   boost::bind(&server::handle_accept, this, new_connection,
+										   ba::placeholders::error));
+	}
 }
 
 /** 
@@ -84,15 +88,17 @@ server::~server() {
  * 
  * @param e reference to error object
  */
-void server::handle_accept(const boost::system::error_code& e) {
+void server::handle_accept(connection::pointer old_connection, const boost::system::error_code& e) {
 	if (!e) {
 		// schedule new task to thread pool
-		io_service_executors_.post(boost::bind(&connection::run, new_connection_));
+		io_service_executors_.post(boost::bind(&connection::run, old_connection));
 		// create next connection, that will accepted
-		new_connection_=connection::create(io_service_executors_);
+		connection::pointer new_connection = connection::create(io_service_executors_);
+		auto &socket = new_connection->socket();
 		// start new accept operation
-		acceptor_.async_accept(new_connection_->socket(),
-							   boost::bind(&server::handle_accept, this,
+		acceptor_.async_accept(socket,
+							   boost::bind(&server::handle_accept, this, 
+										   boost::move(new_connection),	// doesn't copy and doesn't use the atomic counter with memory barrier
 										   ba::placeholders::error));
 	}
 }
