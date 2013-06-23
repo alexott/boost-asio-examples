@@ -22,7 +22,7 @@
 class server : private boost::noncopyable {
 public:
 	server(ba::io_service& io_service_accept, ba::io_service& io_service_execute, 
-		unsigned int thread_num_acceptors, unsigned int thread_num_executors, unsigned int port = 10001);
+		unsigned int thread_num_acceptors, unsigned int thread_num_executors, unsigned int port = 10001, std::string interface_address = "");
 	~server();
 
 private:
@@ -34,7 +34,8 @@ private:
 	ba::io_service::work work_executors_;   /**< object to inform the io_service_executors_ when it has work to do */
 	std::vector<boost::thread> thr_grp_acceptors_;  /**< thread pool object for acceptors */
 	std::vector<boost::thread> thr_grp_executors_;  /**< thread pool object for executors */
-	ba::ip::tcp::acceptor acceptor_;     /**< object, that accepts new connections */
+	const ba::ip::tcp::endpoint endpoint_;   /**< object, that points to the connection endpoint */
+	ba::ip::tcp::acceptor acceptor_;         /**< object, that accepts new connections */
 };
 
 /** 
@@ -45,13 +46,18 @@ private:
  * @param port port to listen on, by default - 10001
  */
 server::server(ba::io_service& io_service_acceptors, ba::io_service& io_service_executors, 
-			   unsigned int thread_num_acceptors, unsigned int thread_num_executors, unsigned int port)
+			   unsigned int thread_num_acceptors, unsigned int thread_num_executors, unsigned int port, std::string interface_address)
 	: io_service_acceptors_(io_service_acceptors),
 	  io_service_executors_(io_service_executors),
 	  work_acceptors_(io_service_acceptors_),
 	  work_executors_(io_service_executors_),
-	  acceptor_(io_service_acceptors_, ba::ip::tcp::endpoint(ba::ip::tcp::v4(), port))
+	  endpoint_(interface_address.empty()?	
+				(ba::ip::tcp::endpoint(ba::ip::tcp::v4(), port)): // INADDR_ANY for v4 (in6addr_any if the fix to v6)
+				ba::ip::tcp::endpoint(ba::ip::address().from_string(interface_address), port) ),	// specified ip address
+	  acceptor_(io_service_acceptors_, endpoint_)	// By default set option to reuse the address (i.e. SO_REUSEADDR)
 {
+	std::cout << endpoint_.address().to_string() << ":" << endpoint_.port() << std::endl;
+
 	// create threads in pool for executors
 	for(size_t i = 0; i < thread_num_executors; ++i)
 		thr_grp_executors_.emplace_back(boost::bind(&boost::asio::io_service::run, &io_service_executors_));
@@ -114,6 +120,7 @@ void server::handle_accept(connection::pointer old_connection, const boost::syst
 int main(int argc, char** argv) {
 	try {
 		int thread_num_acceptors = 2, thread_num_executors = 10, port = 10001;
+		std::string interface_address;
 		// read number of threads in thread pool from command line, if provided
 		if(argc > 1)
 			thread_num_acceptors = boost::lexical_cast<int>(argv[1]);
@@ -122,9 +129,12 @@ int main(int argc, char** argv) {
 		// read port number from command line, if provided
 		if(argc > 3)
 			port = boost::lexical_cast<int>(argv[3]);
+		// read local interface address from command line, if provided
+		if(argc > 4)
+			interface_address = argv[4];
 		ba::io_service io_service_acceptors, io_service_executors;
 		// construct new server object
-		server s(io_service_acceptors, io_service_executors, thread_num_acceptors, thread_num_executors, port);
+		server s(io_service_acceptors, io_service_executors, thread_num_acceptors, thread_num_executors, port, interface_address);
 		// run io_service object, that perform all dispatch operations
 		io_service_acceptors.run();
 	} catch (std::exception& e) {
