@@ -31,7 +31,7 @@ public:
 	 * @return pointer to newly allocated object
 	 */
 	static pointer create(ba::io_service& io_service) {
-		return boost::make_shared<connection>(io_service, hide_me());
+		return boost::make_shared<connection>(boost::ref(io_service), hide_me());
 	}
 
 	/** 
